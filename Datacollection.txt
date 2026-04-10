@@ -1,0 +1,291 @@
+"""
+Data Collection Script
+Collects data from YouTube, Google News, Newspapers, Wikipedia
+Run: python src/data_collection.py
+"""
+
+import os
+import time
+import json
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime
+
+# ── CONFIG ─────────────────────────────────────────────────────
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "YOUR_YOUTUBE_API_KEY")
+
+OUTPUT_DIRS = {
+    "youtube":    "data/raw/youtube",
+    "news":       "data/raw/twitter",
+    "newspapers": "data/raw/newspapers",
+    "wikipedia":  "data/raw/wikipedia",
+    "processed":  "data/processed",
+}
+
+SEARCH_QUERIES = [
+    "Karnataka election 2028",
+    "BJP Karnataka",
+    "Congress Karnataka",
+    "Siddaramaiah speech",
+    "JDS Karnataka",
+    "Karnataka CM candidate",
+    "ಕರ್ನಾಟಕ ಚುನಾವಣೆ",
+    "Karnataka politics news",
+]
+
+WIKI_TOPICS = [
+    "Karnataka Legislative Assembly",
+    "Bharatiya Janata Party Karnataka",
+    "Indian National Congress Karnataka",
+    "Janata Dal (Secular)",
+    "Siddaramaiah",
+    "B. S. Yediyurappa",
+    "H. D. Kumaraswamy",
+    "D. K. Shivakumar",
+    "Karnataka",
+    "2023 Karnataka Legislative Assembly election",
+    "Elections in Karnataka",
+    "Chief Minister of Karnataka",
+    "Basavaraj Bommai",
+    "Politics of Karnataka",
+]
+
+NEWS_FEEDS = {
+    "the_hindu": [
+        "https://www.thehindu.com/news/national/karnataka/feeder/default.rss",
+        "https://www.thehindu.com/elections/feeder/default.rss",
+    ],
+    "times_of_india": [
+        "https://timesofindia.indiatimes.com/rssfeeds/4719148.cms",
+        "https://timesofindia.indiatimes.com/rssfeeds/1221656.cms",
+    ],
+    "ndtv": [
+        "https://feeds.feedburner.com/ndtvnews-india-news",
+    ],
+}
+
+KEYWORDS = [
+    "karnataka","bjp","congress","jds","election","siddaramaiah",
+    "kumaraswamy","bengaluru","modi","rahul","political","vote","poll"
+]
+
+
+def create_dirs():
+    for path in OUTPUT_DIRS.values():
+        os.makedirs(path, exist_ok=True)
+    print("✅ Directories created!")
+
+
+def collect_youtube():
+    try:
+        from googleapiclient.discovery import build
+    except ImportError:
+        print("  ⚠️ google-api-python-client not installed. Skipping YouTube.")
+        return pd.DataFrame()
+
+    print("\n📺 Collecting YouTube data...")
+    youtube      = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+    all_comments = []
+
+    for query in SEARCH_QUERIES:
+        try:
+            response = youtube.search().list(
+                part="snippet", q=query, type="video",
+                maxResults=8, order="relevance"
+            ).execute()
+
+            for item in response.get("items", []):
+                video_id = item["id"]["videoId"]
+                title    = item["snippet"]["title"]
+                channel  = item["snippet"]["channelTitle"]
+
+                try:
+                    comments_resp = youtube.commentThreads().list(
+                        part="snippet", videoId=video_id,
+                        maxResults=100, order="relevance", textFormat="plainText"
+                    ).execute()
+
+                    for c_item in comments_resp.get("items", []):
+                        c = c_item["snippet"]["topLevelComment"]["snippet"]
+                        all_comments.append({
+                            "text":         c["textDisplay"],
+                            "author":       c["authorDisplayName"],
+                            "like_count":   c.get("likeCount", 0),
+                            "published_at": c["publishedAt"],
+                            "video_title":  title,
+                            "channel":      channel,
+                            "query_used":   query,
+                            "platform":     "youtube",
+                            "collected_at": datetime.now().isoformat()
+                        })
+                except Exception:
+                    pass
+                time.sleep(1)
+
+        except Exception as e:
+            print(f"  ❌ Error for '{query}': {e}")
+        time.sleep(2)
+
+    df = pd.DataFrame(all_comments)
+    if not df.empty:
+        df.drop_duplicates(subset=["text"], inplace=True)
+        df.to_csv(f"{OUTPUT_DIRS['youtube']}/youtube_data.csv", index=False, encoding="utf-8-sig")
+        print(f"  ✅ YouTube: {len(df)} comments saved")
+    return df
+
+
+def collect_google_news():
+    print("\n📰 Collecting Google News data...")
+    all_articles = []
+
+    for query in SEARCH_QUERIES:
+        try:
+            url      = f"https://news.google.com/rss/search?q={query.replace(' ', '+')}&hl=en-IN&gl=IN&ceid=IN:en"
+            response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            soup     = BeautifulSoup(response.text, "xml")
+            items    = soup.find_all("item")
+
+            for item in items:
+                title       = item.find("title")
+                description = item.find("description")
+                pub_date    = item.find("pubDate")
+                text        = ""
+                if title:       text += title.get_text(strip=True)
+                if description: text += " " + description.get_text(strip=True)
+                if text.strip():
+                    all_articles.append({
+                        "text":         text.strip(),
+                        "published_at": pub_date.get_text() if pub_date else "",
+                        "query_used":   query,
+                        "platform":     "google_news",
+                        "collected_at": datetime.now().isoformat()
+                    })
+            print(f"  ✅ '{query}': {len(items)} articles")
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+        time.sleep(2)
+
+    df = pd.DataFrame(all_articles)
+    if not df.empty:
+        df.to_csv(f"{OUTPUT_DIRS['news']}/news_data.csv", index=False, encoding="utf-8-sig")
+        print(f"  ✅ Google News: {len(df)} articles saved")
+    return df
+
+
+def collect_newspapers():
+    print("\n📰 Collecting newspaper data...")
+    all_articles = []
+
+    for platform, feeds in NEWS_FEEDS.items():
+        for feed_url in feeds:
+            try:
+                response = requests.get(feed_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                soup     = BeautifulSoup(response.text, "xml")
+                items    = soup.find_all("item")
+
+                for item in items:
+                    title       = item.find("title")
+                    description = item.find("description")
+                    text        = ""
+                    if title:       text += title.get_text(strip=True)
+                    if description: text += " " + BeautifulSoup(description.get_text(strip=True), "html.parser").get_text()
+                    text = text.strip()
+                    if len(text) > 20:
+                        all_articles.append({
+                            "text":         text,
+                            "platform":     platform,
+                            "query_used":   feed_url.split("/")[-1],
+                            "collected_at": datetime.now().isoformat()
+                        })
+                print(f"  ✅ {platform}: {len(items)} articles")
+                time.sleep(1)
+            except Exception as e:
+                print(f"  ❌ {platform} error: {e}")
+
+    df = pd.DataFrame(all_articles)
+    if not df.empty:
+        mask        = df["text"].str.lower().str.contains("|".join(KEYWORDS), na=False)
+        df_filtered = df[mask].copy()
+        df_filtered.drop_duplicates(subset=["text"], inplace=True)
+        df_filtered.to_csv(f"{OUTPUT_DIRS['newspapers']}/newspapers_data.csv", index=False, encoding="utf-8-sig")
+        print(f"  ✅ Newspapers: {len(df_filtered)} articles saved")
+        return df_filtered
+    return df
+
+
+def collect_wikipedia():
+    print("\n📖 Collecting Wikipedia data...")
+    try:
+        import wikipediaapi
+    except ImportError:
+        print("  ⚠️ wikipedia-api not installed. Skipping Wikipedia.")
+        return pd.DataFrame()
+
+    wiki     = wikipediaapi.Wikipedia(language="en", user_agent="KarnatakaElectionBot/1.0")
+    all_data = []
+
+    for topic in WIKI_TOPICS:
+        try:
+            page = wiki.page(topic)
+            if page.exists():
+                sentences = page.summary.replace("\n", " ").split(". ")
+                for sentence in sentences:
+                    sentence = sentence.strip()
+                    if len(sentence) > 30:
+                        all_data.append({
+                            "text":         sentence,
+                            "topic":        topic,
+                            "platform":     "wikipedia",
+                            "query_used":   topic,
+                            "collected_at": datetime.now().isoformat()
+                        })
+                print(f"  ✅ {topic[:40]}: {len(sentences)} sentences")
+        except Exception as e:
+            print(f"  ❌ Error: {e}")
+
+    df = pd.DataFrame(all_data)
+    if not df.empty:
+        df.drop_duplicates(subset=["text"], inplace=True)
+        df.to_csv(f"{OUTPUT_DIRS['wikipedia']}/wikipedia_data.csv", index=False, encoding="utf-8-sig")
+        print(f"  ✅ Wikipedia: {len(df)} sentences saved")
+    return df
+
+
+def merge_all():
+    print("\n🔀 Merging all data...")
+    dfs = []
+
+    file_map = {
+        "youtube":   f"{OUTPUT_DIRS['youtube']}/youtube_data.csv",
+        "news":      f"{OUTPUT_DIRS['news']}/news_data.csv",
+        "newspaper": f"{OUTPUT_DIRS['newspapers']}/newspapers_data.csv",
+        "wikipedia": f"{OUTPUT_DIRS['wikipedia']}/wikipedia_data.csv",
+    }
+
+    for name, path in file_map.items():
+        if os.path.exists(path):
+            df = pd.read_csv(path)
+            dfs.append(df[["text","platform","query_used","collected_at"]])
+            print(f"  ✅ {name}: {len(df)} records")
+
+    if dfs:
+        master = pd.concat(dfs, ignore_index=True)
+        master.dropna(subset=["text"], inplace=True)
+        master.drop_duplicates(subset=["text"], inplace=True)
+        master["text"] = master["text"].str.strip()
+        master = master[master["text"].str.len() > 15]
+        master.to_csv(f"{OUTPUT_DIRS['processed']}/master_dataset.csv", index=False, encoding="utf-8-sig")
+        print(f"\n✅ Master dataset: {len(master)} records saved")
+        return master
+    return pd.DataFrame()
+
+
+if __name__ == "__main__":
+    create_dirs()
+    collect_youtube()
+    collect_google_news()
+    collect_newspapers()
+    collect_wikipedia()
+    merge_all()
+    print("\n🎉 Data collection complete!")
