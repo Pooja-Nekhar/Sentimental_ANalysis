@@ -1,0 +1,28 @@
+# Karnataka Election Sentiment Analysis
+# Requirements file for pip install
+
+# ── Core ML & NLP ───────────────────────────────────────────
+torch>=2.0.0
+transformers>=4.30.0
+scikit-learn>=1.3.0
+
+# ── Sentiment Labeling ──────────────────────────────────────
+vaderSentiment>=3.3.2
+
+# ── Data Processing ─────────────────────────────────────────
+pandas>=2.0.0
+numpy>=1.24.0
+
+# ── Data Collection ─────────────────────────────────────────
+google-api-python-client>=2.100.0
+wikipedia-api>=2.0.0
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# ── Dashboard ───────────────────────────────────────────────
+streamlit>=1.28.0
+plotly>=5.18.0
+
+# ── Language Detection ──────────────────────────────────────
+langdetect>=1.0.9
